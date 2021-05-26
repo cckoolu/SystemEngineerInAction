@@ -1,0 +1,450 @@
+=== Centos7 Ceph单节点文件系统部署ceph
+
+准备环境
+关闭防火墙、selinux
+
+
+----
+systemctl stop firewalld
+systemctl disable firewalld 
+setenforce 0
+echo SELINUX=disabled>/etc/selinux/config
+echo SELINUXTYPE=targeted>>/etc/selinux/config
+
+----
+
+ceph
+
+修改主机名
+
+
+----
+HOSTNAME=ceph
+hostnamectl set-hostname ceph
+IP=`ip route |grep src|grep metric|awk -F" " '{ print $9 }'`
+echo "$IP $HOSTNAME" >>/etc/hosts
+
+----
+
+下载 epel 软件包
+
+`yum install -y epel-release`
+
+添加 ceph 源
+
+
+----
+cat <<EOF > /etc/yum.repos.d/ceph.repo
+[ceph]
+name=ceph
+baseurl=http://mirrors.aliyun.com/ceph/rpm-jewel/el7/x86_64/
+gpgcheck=0
+priority =1
+[ceph-noarch]
+name=cephnoarch
+baseurl=http://mirrors.aliyun.com/ceph/rpm-jewel/el7/noarch/
+gpgcheck=0
+priority =1
+[ceph-source]
+name=Ceph source packages
+baseurl=http://mirrors.aliyun.com/ceph/rpm-jewel/el7/SRPMS
+gpgcheck=0
+priority=1
+EOF
+
+----
+
+
+设置本机密匙
+
+`ssh-keygen -t rsa -P "" -f ~/.ssh/id_rsa`
+
+`cat ~/.ssh/id_rsa.pub >> ~/.ssh/authorized_keys`
+
+ceph 服务初始化
+
+----
+yum clean all &&yum -y install ceph-deploy
+
+mkdir /etc/ceph &&cd /etc/ceph
+ceph-deploy new ceph
+
+cp ceph.conf ceph.conf.bak
+sed -i 's@^$@osd_pool_default_size = 1@g' ceph.conf
+echo "mon_pg_warn_max_per_osd = 1000" >> /etc/ceph/ceph.conf
+
+ceph-deploy install ceph
+
+----
+
+创建monitor服务
+
+
+----
+ceph-deploy mon create ceph
+ceph-deploy  gatherkeys ceph
+
+----
+
+准备osd 
+
+
+----
+mkfs.xfs  /dev/sdb
+mkdir -p /var/local/osd
+mount /dev/sdb  /var/local/osd/
+chown -R ceph:ceph /var/local/osd*
+
+----
+
+创建osd 
+
+`ceph-deploy osd prepare ceph:/var/local/osd`
+
+激活osd 
+
+`ceph-deploy osd activate ceph:/var/local/osd`
+
+查看状态
+
+`ceph-deploy osd list ceph`
+
+修改配置文件权限
+
+
+----
+ceph-deploy admin ceph
+chmod +r /etc/ceph/*
+
+----
+
+部署mds服务
+
+
+----
+ceph-deploy mds create ceph
+ceph mds stat
+
+----
+
+7.创建ceph文件系统
+
+----
+ceph fs ls
+ceph osd pool create cephfs_data 128
+ceph osd pool create cephfs_metadata 128
+ceph fs new cephfs cephfs_metadata cephfs_data
+ceph fs ls
+
+----
+
+查看admin用户的密码
+
+----
+[root@ceph ceph]# cat ceph.client.admin.keyring 
+[client.admin]
+	key = AQAUimJg+rTfMxAA4f4py+S4FqIQygoZ6VVneg==
+
+----
+挂载Ceph文件系统
+
+`mount -t ceph 192.168.2.124:/ /home/ceph/GeeShow/upload.static.geeshow.org -o name=admin,secret=AQAUimJg+rTfMxAA4f4py+S4FqIQygoZ6VVneg==`
+
+本地主机挂载
+
+`mount -t ceph 192.168.2.124:/ /home/lu/test/ -o name=admin,secret=AQAUimJg+rTfMxAA4f4py+S4FqIQygoZ6VVneg==`
+
+jenkins
+
+安装jenkins
+
+----
+cat <<EOF > /etc/yum.repos.d/jenkinsph.repo
+[jenkins]
+name=Jenkins-stable
+baseurl=http://pkg.jenkins.io/redhat-stable
+gpgcheck=1
+EOF
+
+sudo rpm --import https://pkg.jenkins.io/redhat-stable/jenkins.io.key
+sudo yum upgrade
+sudo yum -y install java-11-openjdk-devel jenkins
+
+sudo systemctl daemon-reload
+sudo systemctl start jenkins
+sudo systemctl enable jenkins
+sudo systemctl status jenkins
+
+----
+
+ 添加java环境变量，编辑/etc/profile 文件 
+
+`vim /etc/profile`
+
+在配置文件的末尾添加以下代码
+
+----
+# JAVA_HOME
+JAVA_HOME=/usr/lib/jvm/java-11-openjdk-11.0.10.0.9-1.el7_9.x86_64
+JRE_HOME=/usr/lib/jvm/jre-11-openjdk-11.0.10.0.9-1.el7_9.x86_64
+CLASS_PATH=.:$JRE_HOME/lib
+PATH=$PATH:$JAVA_HOME/bin
+export JAVA_HOME JRE_HOME CLASS_PATH PATH
+
+----
+
+解决权限问题,使用root用户执行
+
+编辑 /etc/sysconfig/jenkins 文件 
+
+`vim /etc/sysconfig/jenkins`
+
+找到对应的位置，修改代码
+
+`JENKINS_USER="root"`
+
+重启服务生效
+
+`systemctl restart jenkins`
+
+
+
+----
+# 查看 jenkins 管理员密码
+cat /var/lib/jenkins/secrets/initialAdminPassword
+
+[root@jenkins yum.repos.d]# cat /var/lib/jenkins/secrets/initialAdminPassword
+45d690ae2fbe49b685e97c37fe7cac90
+
+----
+
+访问地址
+http://localhost:8080
+
+在网页上输入密码进行基础安装
+
+
+安装git
+
+----
+yum -y install git
+
+git config --global user.email "test@qq.com"
+git config --global user.name "testName"
+
+----
+
+安装插件gitee
+
+https://gitee.com/help/articles/4193
+
+webhook 配置
+
+https://gitee.com/help/categories/40
+
+frp 配置
+
+初始配置
+
+----
+wget -c https://github.com/fatedier/frp/releases/download/v0.31.1/frp_0.31.1_linux_amd64.tar.gz
+tar xf frp_0.31.1_linux_amd64.tar.gz
+mv frp_0.31.1_linux_amd64 /usr/local
+ln -s /usr/local/frp_0.31.1_linux_amd64 /usr/local/frp
+
+ln -s /usr/local/frp/frpc /usr/bin/frpc
+ln -s /usr/local/frp/frps /usr/bin/frps
+
+mkdir /etc/frp
+
+useradd -M -s /sbin/nologin frp
+
+----
+
+服务端配置
+
+----
+cat << EOF >  /etc/frp/frps.ini
+[common]
+bind_addr = 0.0.0.0
+bind_port = 4000
+
+privilege_token = geek
+
+max_pool_count = 5
+
+vhost_http_port = 4080
+vhost_https_port = 4443
+
+dashboard_port = 4500
+dashboard_user = admin
+dashboard_pwd = geek
+EOF
+
+
+cp /usr/local/frp/systemd/frps.service /usr/lib/systemd/system/frps.service
+
+systemctl enable frps
+systemctl start frps
+# 查看日志信息
+systemctl  status frps
+
+----
+
+客户端配置
+
+----
+cat << EOF >  /etc/frp/frpc.ini
+[common]
+# 服务器ip、端口
+server_addr = 47.74.2.145
+server_port = 4000
+
+# 客户端ip、端口
+admin_addr = 127.0.0.1
+admin_port = 4000
+
+# 通信token
+privilege_token = geek
+pool_count = 5
+
+[jenkins]
+type = tcp
+local_ip=127.0.0.1
+local_port = 9090
+remote_port = 8181
+EOF
+
+cp /usr/local/frp/systemd/frpc.service /usr/lib/systemd/system/frpc.service
+
+systemctl enable frpc
+systemctl start frpc
+# 查看日志信息
+systemctl  status frpc
+
+----
+
+maven 环境安装
+
+下载maven压缩包，如：apache-maven-3.6.3-bin.tar.gz
+
+官网链接：http://maven.apache.org/download.cgi
+
+`wget https://mirrors.bfsu.edu.cn/apache/maven/maven-3/3.6.3/binaries/apache-maven-3.6.3-bin.tar.gz
+`
+
+将文件拷贝到/usr/local目录中并查看文件
+
+`cp apache-maven-3.6.3-bin.tar.gz /usr/local/ && cd /usr/local `
+
+解压文件
+
+`tar -zxvf apache-maven-3.6.3-bin.tar.gz `
+
+ 编辑/etc/profile 文件 
+
+`vim /etc/profile`
+
+在配置文件的末尾添加以下代码
+
+
+----
+# MAVEN_HOME
+MAVEN_HOME=/usr/local/apache-maven-3.6.3
+export MAVEN_HOME
+export PATH=${PATH}:${MAVEN_HOME}/bin
+
+----
+
+使资源文件生效
+
+`source /etc/profile`
+
+检查配置
+
+----
+mvn --version
+
+[root@ceph apache-maven-3.6.3]# mvn --version
+Apache Maven 3.6.3 (cecedd343002696d0abb50b32b541b8a6ba2883f)
+Maven home: /usr/local/apache-maven-3.6.3
+Java version: 11.0.10, vendor: Red Hat, Inc., runtime: /usr/lib/jvm/java-11-openjdk-11.0.10.0.9-1.el7_9.x86_64
+Default locale: en_US, platform encoding: UTF-8
+OS name: "linux", version: "3.10.0-1160.21.1.el7.x86_64", arch: "amd64", family: "unix"
+
+----
+
+maven 换源
+
+`vim /usr/local/apache-maven-3.6.3/conf/settings.xml `
+
+
+----
+<mirror>  
+    <id>nexus-aliyun</id>  
+    <mirrorOf>central</mirrorOf>    
+    <name>Nexus aliyun</name>  
+    <url>http://maven.aliyun.com/nexus/content/groups/public</url>  
+</mirror>  
+
+----
+
+nginx 安装
+
+----
+cat << EOF > /etc/yum.repos.d/nginx.repo
+[nginx-stable]
+name=nginx stable repo
+baseurl=http://nginx.org/packages/centos/\$releasever/\$basearch/
+gpgcheck=1
+enabled=1
+gpgkey=https://nginx.org/keys/nginx_signing.key
+module_hotfixes=true
+
+[nginx-mainline]
+name=nginx mainline repo
+baseurl=http://nginx.org/packages/mainline/centos/\$releasever/\$basearch/
+gpgcheck=1
+enabled=0
+gpgkey=https://nginx.org/keys/nginx_signing.key
+module_hotfixes=true
+EOF
+
+----
+
+安装Nginx
+
+`yum install -y nginx`
+
+启动nginx，并设置开机启动：
+
+`sudo systemctl start nginx && sudo systemctl enable nginx`
+
+修改 `nginx.conf` 文件，在http中添加以下内容
+
+`vim /etc/nginx/nginx.conf`
+
+----
+server {
+    listen   80 default;
+    server_name master;
+
+    location /mnt     {
+        alias /mnt;
+        autoindex on ;
+        }
+}
+
+----
+
+重载nginx服务
+
+`nginx -s reload`
+
+
+客户端使用
+
+`sudo pacman -S ceph`
+
+
+`mount -t ceph 192.168.2.124:/ /home/user/test/ -o name=admin,secret=AQAUimJg+rTfMxAA4f4py+S4FqIQygoZ6VVneg==`

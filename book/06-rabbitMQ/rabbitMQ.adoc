@@ -1,0 +1,5 @@
+== rabbitMQ
+
+include::sections/rabbitMQ基础命令.adoc[]
+
+<<<

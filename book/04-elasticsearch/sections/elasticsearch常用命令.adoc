@@ -1,0 +1,103 @@
+=== elasticsearch常用命令
+
+elastaticsearch
+
+检查集群的运行状况
+
+curl -X GET "localhost:9200/_cat/health?v&pretty"
+
+获取集群中节点的列表
+
+curl -X GET "localhost:9200/_cat/nodes?v&pretty"
+
+查看索引
+
+curl -X GET "localhost:9200/_cat/indices?v&pretty"
+
+创建一个名为“ customer”的索引
+
+curl -X PUT "localhost:9200/customer?pretty&pretty"
+
+索引指定ID添加内容
+
+curl -X PUT "localhost:9200/customer/doc/1?pretty&pretty" -H 'Content-Type: application/json' -d'
+{
+  "name": "John Doe"
+}
+'
+
+索引不指定ID的添加内容
+
+curl -X POST "localhost:9200/customer/doc?pretty&pretty" -H 'Content-Type: application/json' -d'
+{
+  "name": "Jane Doe"
+}
+'
+
+检索文档
+
+curl -X GET "localhost:9200/customer/doc/2?pretty&pretty"
+
+删除索引
+
+curl -X DELETE "localhost:9200/customer?pretty&pretty"
+
+修改索引内容
+
+curl -X PUT "localhost:9200/customer/doc/1?pretty&pretty" -H 'Content-Type: application/json' -d'
+{
+  "name": "Jane Doe"
+}
+'
+
+更新文档
+
+curl -X POST "localhost:9200/customer/doc/1/_update?pretty&pretty" -H 'Content-Type: application/json' -d'
+{
+  "doc": { "name": "Jane Doe" }
+}
+'
+
+更新我们之前的文档
+curl -X POST "localhost:9200/customer/doc/1/_update?pretty&pretty" -H 'Content-Type: application/json' -d'
+{
+  "doc": { "name": "Jane Doe", "age": 20 }
+}
+'
+
+curl -X POST "localhost:9200/customer/doc/1/_update?pretty&pretty" -H 'Content-Type: application/json' -d'
+{
+  "script" : "ctx._source.age += 5"
+}
+'
+
+删除ID为1的内容
+curl -X DELETE "localhost:9200/customer/doc/1?pretty&pretty"
+
+
+
+批量修改内容
+
+----
+curl -X POST "localhost:9200/customer/doc/_bulk?pretty&pretty" -H 'Content-Type: application/json' -d'
+{"index":{"_id":"1"}}
+{"name": "John Doe" }
+{"index":{"_id":"2"}}
+{"name": "Jane Doe" }
+'
+
+curl -X POST "localhost:9200/customer/doc/_bulk?pretty&pretty" -H 'Content-Type: application/json' -d'
+{"update":{"_id":"1"}}
+{"doc": { "name": "John Doe becomes Jane Doe" } }
+{"delete":{"_id":"2"}}
+'
+----
+
+
+kibana 配置文件详情
+
+https://www.elastic.co/guide/en/kibana/current/settings.html
+
+elasticsearch 配置文件
+
+https://www.elastic.co/guide/cn/elasticsearch/guide/current/important-configuration-changes.html

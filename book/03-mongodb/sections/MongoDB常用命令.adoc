@@ -1,0 +1,97 @@
+=== MongoDB常用命令
+
+MongoDB - 连接
+
+mongo -uroot -pluyu --host 127.0.0.1
+
+MongoDB 数据库
+
+----
+# 创建数据库(创建并使用)
+> use database
+switched to db database
+
+# 查看当前数据库
+> db
+database
+
+# 查看所有数据库,需有数据
+> show dbs
+admin   0.000GB
+config  0.000GB
+local   0.000GB
+lu      0.000GB
+
+# 删除当前数据库
+> db.dropDatabase()
+{ "dropped" : "lu", "ok" : 1 }
+----
+
+
+集合
+
+----
+# 创建集合，类似数据库中的表
+> db.createCollection("runoob")   
+
+# 查看已有集合
+> show collections
+
+
+> db.runoob.drop()
+true
+> show tables
+
+
+
+db.lu.insert({"name": "lu"})
+
+db.lu.insert({ "_id" : { "$oid" : "551582c558c7b4fbacf16735" },
+  "name" : "MongoDB",
+  "type" : "database",
+  "count" : 1,
+  "info" : { "x" : 203, "y" : 102 } })
+
+db.col.update({'title':'MongoDB 教程'},{$set:{'title':'MongoDB'}})
+----
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+db.createUser(
+  {
+    user: "root",
+    pwd: "luyu",
+    roles: [ "root"]
+  }
+)
+
+
+db.createUser(
+  {
+    user: "lu",
+    pwd: "luyu",
+    roles: [ { role: "readWrite", db: "lu" } ]
+  }
+)

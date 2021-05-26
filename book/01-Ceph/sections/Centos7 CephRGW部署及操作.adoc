@@ -1,0 +1,282 @@
+### Centos7 CephRGW部署及操作
+Ceph对象存储网关服务(RGW-RADOS Gateway)
+
+安装ceph-radosgw
+
+`sudo yum install -y ceph-radosgw`
+
+创建RGW用户和keyring
+
+在master上创建keyring：
+
+`sudo ceph-authtool --create-keyring /etc/ceph/ceph.client.radosgw.keyring`
+
+`sudo chmod +r /etc/ceph/ceph.client.radosgw.keyring`
+
+生成ceph-radosgw服务对应的用户和key：
+
+`sudo ceph-authtool /etc/ceph/ceph.client.radosgw.keyring -n client.radosgw.gateway --gen-key`
+
+为用户添加访问权限：
+
+`sudo ceph-authtool -n client.radosgw.gateway --cap osd 'allow rwx' --cap mon 'allow rwx' /etc/ceph/ceph.client.radosgw.keyring`
+
+导入keyring到集群中：
+
+`sudo ceph -k /etc/ceph/ceph.client.admin.keyring auth add client.radosgw.gateway -i /etc/ceph/ceph.client.radosgw.keyring`
+
+创建资源池
+由于RGW要求专门的pool存储数据，这里手动创建这些Pool，在admin-node上执行：
+
+----
+ceph osd pool create .rgw 128 128
+ceph osd pool create .rgw.root 128 128
+ceph osd pool create .rgw.control 128 128
+ceph osd pool create .rgw.gc 128 128
+ceph osd pool create .rgw.buckets 128 128
+ceph osd pool create .rgw.buckets.index 128 128
+ceph osd pool create .rgw.buckets.extra 128 128
+ceph osd pool create .log 128 128
+ceph osd pool create .intent-log 128 128
+ceph osd pool create .usage 128 128
+ceph osd pool create .users 128 128
+ceph osd pool create .users.email 128 128
+ceph osd pool create .users.swift 128 128
+ceph osd pool create .users.uid 128 128
+----
+
+RGW 配置
+
+在master节点的/etc/ceph.conf上添加以下内容：
+
+----
+[client.radosgw.gateway]
+rgw frontends=fastcgi socket_port=9000 socket_host=0.0.0.0
+host=master
+keyring=/etc/ceph/ceph.client.radosgw.keyring
+log file=/var/log/radosgw/client.radosgw.gateway.log
+rgw print continue=false
+rgw content length compat = true
+----
+
+nginx 配置
+在/etc/nginx/nginx.conf中http段落中添加如下内容：
+
+----
+server {
+    listen   80 default;
+    server_name master;
+    location / {
+        fastcgi_pass_header Authorization;
+        fastcgi_pass_request_headers on;
+        fastcgi_param QUERY_STRING  $query_string;
+        fastcgi_param REQUEST_METHOD $request_method;
+        fastcgi_param CONTENT_LENGTH $content_length;
+        fastcgi_param CONTENT_LENGTH $content_length;
+        if ($request_method = PUT) {
+                rewrite ^ /PUT$request_uri;
+        }
+        include fastcgi_params;
+        fastcgi_pass 127.0.0.1:9000;
+    }
+    location /PUT/ {
+        internal;
+        fastcgi_pass_header Authorization;
+        fastcgi_pass_request_headers on;
+        include fastcgi_params;
+        fastcgi_param QUERY_STRING  $query_string;
+        fastcgi_param REQUEST_METHOD $request_method;
+        fastcgi_param CONTENT_LENGTH $content_length;
+        fastcgi_param  CONTENT_TYPE $content_type;
+        fastcgi_pass 127.0.0.1:9000;
+    }
+}
+----
+
+restart nginx服务：
+
+`sudo systemctl restart nginx`
+
+启动RGW
+
+----
+sudo mkdir /var/log/radosgw
+sudo chown ceph:ceph /var/log/radosgw
+
+sudo cp /usr/lib/systemd/system/ceph-radosgw@.service /usr/lib/systemd/system/ceph-radosgw@radosgw.gateway.service 
+sudo systemctl start ceph-radosgw@radosgw.gateway
+sudo systemctl enable ceph-radosgw@radosgw.gateway
+
+# 查看radosgw服务状态：
+sudo systemctl status ceph-radosgw@radosgw.gateway
+----
+
+访问测试
+使用curl服务状态，如果出现下面的内容则服务正常：
+
+----
+[root@master ceph]# curl master
+<?xml version="1.0" encoding="UTF-8"?><ListAllMyBucketsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Owner><ID>anonymous</ID><DisplayName></DisplayName></Owner><Buckets></Buckets></ListAllMyBucketsResult>
+----
+
+
+swift 操作
+
+创建用户
+
+我们前面介绍了对象存储的数据结构，数据必须存储在某个用户下面。因此，想正常的访问RGW，需要创建相应的RGW用户，并赋予相应的权限，radosgw-admin命令实现了这些功能。 执行下面命令，来创建一个名为testuser的用户：
+
+`radosgw-admin user create --uid="testuser" --display-name="First User"`
+
+创建子用户
+
+Swift用户是作为子用户subuser被创建的，执行以下命令：
+
+` radosgw-admin subuser create --uid=testuser --subuser=testuser:swift --access=full`
+
+用Swift的客户端访问对象存储
+
+添加Swift客户端源
+
+`vim /etc/yum.repos.d/openstack.repo`
+
+----
+[centos-openstack-liberty]    
+name=CentOS-7 - OpenStack liberty    
+baseurl=http://vault.centos.org/centos/7.3.1611/cloud/x86_64/openstack-liberty/
+gpgcheck=0    
+enabled=1    
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Centos-7
+----
+
+更新yum缓存并安装swift客户端
+
+`yum update && yum install python-swiftclient`
+
+
+命令样式 Swift客户端的命令格式
+
+`swift -A http://{IP ADDRESS}:{port}/auth/1.0 -U testuser:swift -K '{swift_secret_key}' list`
+
+{swift_secret_key}为创建Swift用户时`radosgw-admin`命令返回的swift_keys->secret_key的值。如果忘记了上述内容，可以通过radosgw-admin命令查看
+
+创建容器/桶 
+
+`swift -A http://192.168.2.33/auth/1.0 -U testuser:swift -K 'WCLGOEjVBtYD3k1UsNUhQ5b029xxnIXKT9ZB8Buy' post testbucket`
+
+查看已创建容器
+
+`swift -A http://192.168.2.33/auth/1.0 -U testuser:swift -K 'WCLGOEjVBtYD3k1UsNUhQ5b029xxnIXKT9ZB8Buy' list `
+
+向容器上传一个文件
+
+`swift -A http://192.168.2.33/auth/1.0 -U testuser:swift -K 'WCLGOEjVBtYD3k1UsNUhQ5b029xxnIXKT9ZB8Buy' upload testbucket /etc/ceph/ceph.conf `
+
+列出容器中的文件
+
+`swift -A http://192.168.2.33/auth/1.0 -U testuser:swift -K 'WCLGOEjVBtYD3k1UsNUhQ5b029xxnIXKT9ZB8Buy' list testbucket`
+
+查看容器状态
+
+`swift -A http://192.168.2.33/auth/1.0 -U testuser:swift -K 'WCLGOEjVBtYD3k1UsNUhQ5b029xxnIXKT9ZB8Buy' stat testbucket`
+
+
+postman 操作 swift API 
+
+https://docs.ceph.com/en/latest/radosgw/swift/
+
+对象存储bucket中的文件位置
+
+1.获取bucket列表
+
+----
+[root@master mnt]# radosgw-admin bucket list
+[
+    "testbucket"
+]
+----
+
+2.bucket 详细信息
+
+----
+[root@master mnt]# radosgw-admin bucket stats --bucket=testbucket
+{
+    "bucket": "testbucket",
+    "pool": "default.rgw.buckets.data",
+    "index_pool": "default.rgw.buckets.index",
+    "id": "b4f03075-1dfb-450f-a621-17c8a3322f60.14099.1",
+    "marker": "b4f03075-1dfb-450f-a621-17c8a3322f60.14099.1",
+    "owner": "testuser",
+    "ver": "0#9",
+    "master_ver": "0#0",
+    "mtime": "2021-03-05 16:05:03.676188",
+    "max_marker": "0#",
+    "usage": {
+        "rgw.main": {
+            "size_kb": 269,
+            "size_kb_actual": 276,
+            "num_objects": 3
+        }
+    },
+    "bucket_quota": {
+        "enabled": false,
+        "max_size_kb": -1,
+        "max_objects": -1
+    }
+}
+----
+
+3.检查对应bucket在index中是否存在
+
+----
+[root@master mnt]# rados -p default.rgw.buckets.index ls
+.dir.b4f03075-1dfb-450f-a621-17c8a3322f60.14099.1
+----
+
+4.查看对应INDEX中记录的key
+
+----
+[root@master mnt]# rados -p default.rgw.buckets.index listomapkeys .dir.b4f03075-1dfb-450f-a621-17c8a3322f60.14099.1
+etc/ceph/ceph.conf
+etc/ceph/mysql.png
+mysql.png
+----
+
+5.找到某个文件的分片信息
+
+----
+[root@master 25.0_head]# rados -p default.rgw.buckets.data ls | grep mysql.png
+b4f03075-1dfb-450f-a621-17c8a3322f60.14099.1_mysql.png
+----
+
+6.找出该分片在osd上存放的实际位置
+
+----
+ceph osd map default.rgw.buckets.data b4f03075-1dfb-450f-a621-17c8a3322f60.14099.1_mysql.png
+
+[root@master mnt]# ceph osd map default.rgw.buckets.data b4f03075-1dfb-450f-a621-17c8a3322f60.14099.1_mysql.png
+osdmap e127 pool 'default.rgw.buckets.data' (26) object 'b4f03075-1dfb-450f-a621-17c8a3322f60.14099.1_mysql.png' -> pg 26.eefdd15 (26.5) -> up ([1,2], p1) acting ([1,2], p1)
+----
+7.进入存放文件的目录
+
+----
+[root@node02 mnt]# cd /var/lib/ceph/osd/ceph-2/current/26.5_head/
+
+[root@node02 26.5_head]# ls
+b4f03075-1dfb-450f-a621-17c8a3322f60.14099.1\umysql.png__head_0EEFDD15__1a  __head_00000005__1a
+----
+
+网页访问则在`/etc/nginx/nginx.conf`的 http中添加
+
+----
+# example
+
+server {
+listen     80 default;
+server_name master;
+    location /var/lib/ceph/osd/ceph-1/current/{
+                alias /var/lib/ceph/osd/ceph-1/current/;
+                autoindex on;
+	}
+}
+----

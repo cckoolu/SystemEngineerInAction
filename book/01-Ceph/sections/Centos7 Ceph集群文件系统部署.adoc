@@ -1,0 +1,420 @@
+=== Centos7 Ceph集群文件系统部署
+
+ceph 基础环境搭建
+
+环境
+| 主机名 |  CEPH组件 | 私网IP |
+| :----: | :-----: | :----: |
+| node 1 | ceph-deploy & mon & osd & ntp | 192.168.2.117  |
+| node2 | mon & mgr & osd & ntp | 192.168.2.119  |
+| node3 | mon & mgr & osd & ntp | 192.168.2.121  |
+
+关闭防火墙、selinux
+
+----
+systemctl stop firewalld
+systemctl disable firewalld 
+setenforce 0
+echo SELINUX=disabled>/etc/selinux/config
+echo SELINUXTYPE=targeted>>/etc/selinux/config
+----
+
+修改主机名
+
+----
+# node1
+sudo hostnamectl set-hostname node1
+
+# node2
+sudo hostnamectl set-hostname node2
+
+# node3
+sudo hostnamectl set-hostname node3
+----
+
+修改域名解析文件
+
+----
+# 各节点均设置
+cat >> /etc/hosts << EOF
+192.168.2.117 node1 
+192.168.2.119 node2
+192.168.2.121 node3
+EOF
+----
+
+在主节点配置无密码访问
+
+----
+ssh-keygen -t rsa
+
+ssh-copy-id -i /root/.ssh/id_rsa.pub root@node2
+
+ssh-copy-id -i /root/.ssh/id_rsa.pub root@node3
+----
+
+配置yum源
+
+各节点均设置
+
+配置基础yum源
+----
+# 
+yum clean all
+rm -rf /etc/yum.repos.d/*.repo
+wget -O /etc/yum.repos.d/CentOS-Base.repo http://mirrors.aliyun.com/repo/Centos-7.repo
+wget -O /etc/yum.repos.d/epel.repo http://mirrors.aliyun.com/repo/epel-7.repo
+sed -i '/aliyuncs/d' /etc/yum.repos.d/CentOS-Base.repo
+sed -i '/aliyuncs/d' /etc/yum.repos.d/epel.repo
+----
+
+配置ceph源
+----
+# 
+cat >> /etc/hosts << EOF
+[ceph]
+name=ceph
+baseurl=http://mirrors.aliyun.com/ceph/rpm-jewel/el7/x86_64/
+gpgcheck=0
+priority =1
+[ceph-noarch]
+name=cephnoarch
+baseurl=http://mirrors.aliyun.com/ceph/rpm-jewel/el7/noarch/
+gpgcheck=0
+priority =1
+[ceph-source]
+name=Ceph source packages
+baseurl=http://mirrors.aliyun.com/ceph/rpm-jewel/el7/SRPMS
+gpgcheck=0
+priority=1
+EOF
+----
+
+`yum clean all && yum makecache`
+
+配置ntp(各节点)
+
+安装ntp
+
+`yum install -y ntp`
+
+查看服务器是否安装ntp
+
+----
+[root@node1 ~]# rpm -qa |grep ntp
+ntp-4.2.6p5-29.el7.centos.2.x86_64
+ntpdate-4.2.6p5-29.el7.centos.2.x86_64
+----
+
+修改ntp配置文件
+
+NTP服务端
+
+----
+[root@localhost ~]# vim /etc/ntp.conf
+
+把配置文件下面四行注释掉：
+server 0.centos.pool.ntp.org iburst
+server 1.centos.pool.ntp.org iburst
+server 2.centos.pool.ntp.org iburst
+server 3.centos.pool.ntp.org iburst
+
+然后在下面添加这几行：
+server 0.cn.pool.ntp.org iburst
+server 1.cn.pool.ntp.org iburst
+server 2.cn.pool.ntp.org iburst
+server 3.cn.pool.ntp.org iburst
+----
+
+NTP客户端
+
+----
+[root@localhost ~]# vim /etc/ntp.conf
+
+#配置允许NTP Server时间服务器主动修改本机的时间
+restrict 192.168.2.117 nomodify notrap noquery
+
+#注释掉其他时间服务器
+#server 0.centos.pool.ntp.org iburst
+#server 1.centos.pool.ntp.org iburst
+#server 2.centos.pool.ntp.org iburst
+#server 3.centos.pool.ntp.org iburst
+
+#配置时间服务器为本地搭建的NTP Server服务器
+server 192.168.2.117
+----
+
+启动ntp服务，并开机自启动
+
+----
+systemctl start ntpd
+systemctl enable ntpd
+----
+
+与NTP server服务器同步一下时间(客户端)
+
+`ntpdate -u 192.168.2.117`
+
+查询ntp是否同步
+
+----
+[root@node1 ~]# ntpq -p
+     remote           refid      st t when poll reach   delay   offset  jitter
+==============================================================================
+ ntp.xtom.nl     131.176.107.13   2 u    2   64    1  269.603  -57.798  48.075
+ ntp1.ams1.nl.le 130.133.1.10     3 u    1   64    1  294.135  -35.074  20.264
+ electrode.felix 56.1.129.236     3 u    2   64    1  269.624  -18.817  16.131
+ sv1.ggsrv.de    205.46.178.169   2 u    1   64    1  294.061  -33.994  24.304
+
+[root@node3 mnt]# ntpq -p
+     remote           refid      st t when poll reach   delay   offset  jitter
+==============================================================================
+ node1           185.255.55.20    3 u   52 1024    1    0.622   77.126   0.000
+----
+
+安装Ceph
+
+安装ceph(各节点)
+
+----
+yum install ceph -y
+
+[root@node1 ~]# ceph -v
+ceph version 10.2.11 (e4b061b47f07f583c92a050d9e84b1813a35671e)
+----
+
+安装ceph-deploy(主节点)
+
+----
+yum install ceph-deploy -y
+
+[root@node1 ~]# ceph-deploy --version
+1.5.39
+----
+
+部署ceph 集群并部署mon
+
+----
+# 创建部署目录
+mkdir cluster && cd cluster/
+
+# 三个节点都部署mon
+ceph-deploy new node1 node2 node3
+----
+
+修改ceph.conf
+
+----
+# 增加以下内容到 /root/cluster/ceph.conf
+
+public_network=192.168.2.0/24
+osd_pool_default_size = 2
+mon_pg_warn_max_per_osd=20000
+
+# 配置初始 monitor(s)、并收集所有密钥
+ceph-deploy mon create-initial
+
+# 把配置文件和 admin 密钥拷贝到管理节点和 Ceph 节点
+ceph-deploy admin ceph-1 ceph-2 ceph-3
+
+# 查看ceph状态
+ceph -s
+----
+
+创建osd
+
+挂载磁盘
+
+----
+# 各主机添加一块硬盘用以挂载
+
+# 查看系统硬盘分区情况
+lsblk
+
+# node1
+mkfs.xfs /dev/sdb
+
+mkdir -p /var/local/osd0
+
+mount /dev/sdb /var/local/osd0/
+
+# node2 
+mkfs.xfs /dev/sdb
+
+mkdir -p /var/local/osd1
+
+mount /dev/sdb /var/local/osd1/
+
+# node3
+mkfs.xfs /dev/sdb
+
+mkdir -p /var/local/osd2
+
+mount /dev/sdb /var/local/osd2/
+----
+
+创建osd
+
+`ceph-deploy osd prepare node1:/var/local/osd0 node2:/var/local/osd1 node3:/var/local/osd2`
+
+激活osd
+
+`ceph-deploy osd activate node1:/var/local/osd0 node2:/var/local/osd1 node3:/var/local/osd2`
+
+查看状态
+
+`ceph-deploy osd list master node01 node02`
+
+各节点修改ceph.client.admin.keyring权限:
+
+`chmod +r /etc/ceph/ceph.client.admin.keyring`
+
+部署mds
+
+----
+ceph-deploy mds create node1 node2 node3
+
+# 查看状态
+
+[root@node1 ~]# ceph mds stat
+e14: 1/1/1 up {0=node3=up:active}, 2 up:standby
+
+[root@node1 ~]# ceph mon stat
+e1: 3 mons at {node1=192.168.2.117:6789/0,node2=192.168.2.119:6789/0,node3=192.168.2.121:6789/0}, election epoch 14, quorum 0,1,2 node1,node2,node3
+
+[root@node1 ~]# systemctl list-unit-files |grep ceph
+ceph-create-keys@.service                     static  
+ceph-disk@.service                            static  
+ceph-mds@.service                             enabled 
+ceph-mon@.service                             enabled 
+ceph-osd@.service                             enabled 
+ceph-mds.target                               enabled 
+ceph-mon.target                               enabled 
+ceph-osd.target                               enabled 
+ceph.target                                   enabled 
+----
+
+CEPH 文件系统
+
+关于创建存储池确定 pg_num 取值是强制性的，因为不能自动计算。下面是几个常用的值：
+
+* 少于 5 个 OSD 时可把 pg_num 设置为 128
+* OSD 数量在 5 到 10 个时，可把 pg_num 设置为 512
+* OSD 数量在 10 到 50 个时，可把 pg_num 设置为 4096
+* OSD 数量大于 50 时，你得理解权衡方法、以及如何自己计算 pg_num 取值
+* 自己计算 pg_num 取值时可借助 pgcalc 工具
+
+随着 OSD 数量的增加，正确的 pg_num 取值变得更加重要，因为它显著地影响着集群的行为、以及出错时的数据持久性（即灾难性事件导致数据丢失的概率）。
+
+创建 CephFS
+
+----
+# 格式
+$ ceph osd pool create cephfs_data <pg_num>
+$ ceph osd pool create cephfs_metadata <pg_num>
+$ ceph fs new <fs_name> <metadata> <data>
+
+ceph osd pool create cephfs_data 128
+
+ceph osd pool create cephfs_metadata 128
+
+ceph fs new cephfs cephfs_metadata cephfs_data
+
+
+# 查看文件系统信息
+ceph fs ls
+
+# 查看mds信息
+ceph mds stat
+----
+
+用内核驱动挂载 CEPH 文件系统
+
+创建挂载目录
+
+ `mkdir /ceph/cephfs -pv`
+
+挂载启用 cephx 认证的 Ceph 文件系统，你必须指定用户名、密钥
+
+`mount -t ceph node1:6789,node2:6789,node3:6789:/ /ceph/cephfs -o name=admin,secret=AQAXEYlgF+CDFxAAcLlSx3pi6TXTGLrhgWKXXA==`
+
+卸载 Ceph 文件系统
+
+`sudo umount /ceph/cephfs`
+
+注: 各节点挂载后可通过挂载目录进行增删改查
+
+客户端通过FUSE方式挂在cephfs
+
+创建挂载目录
+
+ `mkdir /ceph/cephfs -pv`
+
+客户端安装ceph-fuse软件包
+
+`yum -y install ceph-fuse`
+
+从服务器端，将客户端密钥复制到/etc/ceph/
+
+----
+scp ceph.client.admin.keyring node1:/etc/ceph/
+scp ceph.client.admin.keyring node2:/etc/ceph/
+scp ceph.client.admin.keyring node3:/etc/ceph/
+----
+
+挂载cephfs
+
+`ceph-fuse -m node1:6789,node2:6789,node3:6789 /ceph/cephfs/`
+
+nginx 部署
+
+添加 nginx yum源
+
+----
+cat << EOF > /etc/yum.repos.d/nginx.repo
+[nginx-stable]
+name=nginx stable repo
+baseurl=http://nginx.org/packages/centos/\$releasever/\$basearch/
+gpgcheck=1
+enabled=1
+gpgkey=https://nginx.org/keys/nginx_signing.key
+module_hotfixes=true
+
+[nginx-mainline]
+name=nginx mainline repo
+baseurl=http://nginx.org/packages/mainline/centos/\$releasever/\$basearch/
+gpgcheck=1
+enabled=0
+gpgkey=https://nginx.org/keys/nginx_signing.key
+module_hotfixes=true
+EOF
+----
+
+安装Nginx
+
+`yum install -y nginx`
+
+启动nginx，并设置开机启动：
+
+`sudo systemctl start nginx && sudo systemctl enable nginx`
+
+修改 `nginx.conf` 文件，在http中添加以下内容
+
+`vim /etc/nginx/nginx.conf`
+
+
+----
+server {
+    listen   80 default;
+    server_name master;
+
+    location /ceph/cephfs     {
+        alias /ceph/cephfs;
+        autoindex on ;
+        }
+}
+----
+
+重载nginx服务
+
+`nginx -s reload`

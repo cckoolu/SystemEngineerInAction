@@ -1,0 +1,296 @@
+### centos stream 8 Ceph集群文件系统部署
+
+关闭防火墙
+
+----
+systemctl stop firewalld.service
+systemctl disable firewalld.service
+echo SELINUX=disabled>/etc/selinux/config
+echo SELINUXTYPE=targeted>>/etc/selinux/config
+setenforce 0
+----
+
+修改主机名
+
+* hostnamectl set-hostname ceph1
+
+* hostnamectl set-hostname ceph2
+
+* hostnamectl set-hostname ceph3
+
+各节点均设置
+
+----
+cat >> /etc/hosts << EOF
+192.168.2.139 ceph1 
+192.168.2.140 ceph2
+192.168.2.141 ceph3
+EOF
+----
+
+时间同步
+
+----
+yum install -y chrony
+systemctl enable chronyd
+systemctl start chronyd
+----
+
+ceph 源配置，版本16.2.1
+
+----
+sudo rpm --import 'https://download.ceph.com/keys/release.asc'
+
+cat >> /etc/yum.repos.d/ceph.repo << EOF
+[ceph]
+name=Ceph packages for
+baseurl=https://download.ceph.com/rpm-16.2.1/el8/x86_64/
+enabled=1
+priority=2
+gpgcheck=1
+gpgkey=https://download.ceph.com/keys/release.asc
+
+[ceph-noarch]
+name=Ceph noarch packages
+baseurl=https://download.ceph.com/rpm-16.2.1/el8/noarch
+enabled=1
+priority=2
+gpgcheck=1
+gpgkey=https://download.ceph.com/keys/release.asc
+
+[ceph-source]
+name=Ceph source packages
+baseurl=https://download.ceph.com/rpm-16.2.1/el8/SRPMS
+enabled=0
+priority=2
+gpgcheck=1
+gpgkey=https://download.ceph.com/keys/release.asc
+EOF
+----
+
+安装 ceph 
+
+----
+yum install epel-release -y
+yum install centos-release-ceph-*  -y
+yum install ceph -y
+
+分隔
+
+yum install centos-release-ceph-octopus.noarch
+----
+
+安装 podman 
+
+`dnf install -y podman`
+
+安装 cephadm 
+
+----
+curl --silent --remote-name --location https://github.com/ceph/ceph/raw/octopus/src/cephadm/cephadm
+
+chmod +x cephadm
+
+./cephadm add-repo --release octopus
+
+./cephadm install
+
+which cephadm
+
+cephadm install ceph-common
+----
+
+版本查询
+
+----
+ceph -v
+
+podman --version
+
+cephadm version
+----
+
+
+`mkdir -p /etc/ceph && cd /etc/ceph`
+
+
+创建一个可以被任何访问Ceph集群的主机访问的网络，指定mon-ip，并将生成的配置文件写进/etc/ceph目录里
+
+`cephadm bootstrap --mon-ip 192.168.2.3`
+
+登陆URL: 
+
+https://192.168.2.3:8443/
+
+
+---
+
+ss
+
+----
+添加主机和标签
+cephadm shell -- ceph orch host add ceph1 192.168.2.3
+
+cephadm shell -- ceph orch host add ceph2 192.168.2.4
+
+cephadm shell -- ceph orch host add ceph3 192.168.2.5
+
+
+ssh 密钥
+ceph cephadm get-pub-key > ~/ceph.pub
+
+ssh-copy-id -f -i ~/ceph.pub root@ceph2
+
+ssh-copy-id -f -i ~/ceph.pub root@ceph3
+
+
+将所有主机添加到群集
+cephadm shell -- ceph orch host label add ceph1 mon
+
+cephadm shell -- ceph orch host label add ceph2 mon
+
+cephadm shell -- ceph orch host label add ceph3 mon
+
+
+通过使用主机标签来控制运行监视器的主机
+cephadm shell -- ceph orch apply mon label:mon
+----
+
+修改配置文件，各主机自行修改ip
+
+----
+[root@ceph2 ceph]# cat /etc/ceph/ceph.conf 
+# minimal ceph.conf for 8ec738f4-ad23-11eb-90a3-52540029ab56
+[global]
+	fsid = 8ec738f4-ad23-11eb-90a3-52540029ab56
+	mon_host = [v2:192.168.2.4:3300/0,v1:192.168.2.4:6789/0]
+    public_network=192.168.2.0/24
+    osd_pool_default_size = 2
+    mon_pg_warn_max_per_osd=20000
+----
+
+
+创建OSD
+
+----
+使用任何可用和未使用的存储设备创建OSD
+
+cephadm shell -- ceph orch apply osd --all-available-devices
+
+使用特定主机上的特定设备创建OSD
+
+cephadm shell -- ceph orch daemon add osd ceph1:/dev/vdb
+
+cephadm shell -- ceph orch daemon add osd ceph2:/dev/vdb
+
+cephadm shell -- ceph orch daemon add osd ceph3:/dev/vdb
+----
+
+部署cephfs的mds服务，指定集群名及mds的数量
+
+----
+$ ceph fs volume create <fs_name> --placement="<placement spec>"
+
+ceph orch apply mds cephfs --placement=3
+----
+
+创建 CephFS
+
+----
+# 格式
+$ ceph osd pool create cephfs_data <pg_num>
+$ ceph osd pool create cephfs_metadata <pg_num>
+$ ceph fs new <fs_name> <metadata> <data>
+
+ceph osd pool create cephfs_data 128
+
+ceph osd pool create cephfs_metadata 128
+
+ceph fs new cephfs cephfs_metadata cephfs_data
+
+
+# 查看文件系统信息
+ceph fs ls
+
+# 查看mds信息
+ceph mds stat
+----
+
+挂载cephfs
+
+----
+[root@ceph1 cephfs]# cat /etc/ceph/ceph.client.admin.keyring 
+[client.admin]
+	key = AQDT+JFgke4PABAAw/4LbCniSZP8qUdfLk/lSA==
+
+
+mount -t ceph 192.168.2.3:6789,192.168.2.4:6789,192.168.2.5:6789:/ /ceph/cephfs -o name=admin,secret=AQDT+JFgke4PABAAw/4LbCniSZP8qUdfLk/lSA==
+----
+
+nginx 安装使用
+
+----
+dnf install nginx -y
+
+sudo systemctl start nginx && sudo systemctl enable nginx
+
+修改 `nginx.conf` 文件，在http中添加以下内容
+
+vim /etc/nginx/nginx.conf
+
+    server {
+        listen   80 default;
+        server_name master;
+
+        location /upload_static_picture     {
+            alias /ceph/cephfs;
+            autoindex on ;
+            }
+    }
+----
+
+---
+
+以下为测试检查命令
+
+----
+生成密钥
+To add the cephadm SSH key to the host:
+> ceph cephadm get-pub-key > ~/ceph.pub
+> ssh-copy-id -f -i ~/ceph.pub root@ceph3
+
+To check that the host is reachable:
+> ceph cephadm get-ssh-config > ssh_config
+> ceph config-key get mgr/cephadm/ssh_identity_key > ~/cephadm_private_key
+> ssh -F ssh_config -i ~/cephadm_private_key root@ceph3
+----
+
+查看可使用的硬盘
+
+`ceph orch device ls`
+
+查看当前的主机和标签
+
+`ceph orch host ls`
+
+查看现有的osd
+
+`ceph osd tree`
+
+----
+cd /var/lib/ceph
+
+cd /run/cephadm
+
+cd /etc/systemd/system
+
+podman ps -a
+
+podman images
+
+mount -t ceph 192.168.2.3:6789,192.168.2.4:6789,192.168.2.5:6789:/ /ceph/cephfs -o name=admin,secret=AQDT+JFgke4PABAAw/4LbCniSZP8qUdfLk/lSA==
+
+sudo dnf module reset container-tools:3.0
+
+sudo dnf module enable -y container-tools:3.0
+----

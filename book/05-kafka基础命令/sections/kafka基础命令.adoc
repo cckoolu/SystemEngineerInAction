@@ -1,0 +1,44 @@
+=== kafka基础命令
+
+yaourt -S aur/zookeeper
+
+yaourt -Qs aur/kafka
+
+systemctl start zookeeper
+
+systemctl start kafka
+
+
+创建一个 topic
+
+创建一个名为“test”的topic，它有一个分区和一个副本
+
+kafka-topics.sh --create --zookeeper localhost:2181 --replication-factor 1 --partitions 1 --topic test
+
+list（列表）命令来查看这个topic
+
+kafka-topics.sh --list --zookeeper localhost:2181
+
+删除topic 信息
+
+rm -rf /var/lib/kafka/*
+
+producer 创建
+
+kafka-console-producer.sh --broker-list localhost:9092 --topic test
+kafka-console-producer.sh --topic quickstart-events --bootstrap-server localhost:9092
+
+consumer 创建
+
+kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic test --from-beginning
+kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic quickstart-events --from-beginning 
+
+显示使用情况信息
+
+kafka-topics.sh --describe --topic quickstart-events --bootstrap-server localhost:9092
+
+
+---
+
+kafka-topics.sh --create --topic quickstart-events --bootstrap-server localhost:9092
+

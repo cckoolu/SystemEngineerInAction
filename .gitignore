@@ -1,0 +1,9 @@
+# build artifacts
+vendor/
+.bundle/
+Gemfile.lock
+小盧的自我修养.html
+小盧的自我修养.pdf
+*_build.sh
+/images/
+release_github_io.sh

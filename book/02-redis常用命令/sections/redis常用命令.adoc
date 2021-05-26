@@ -1,0 +1,96 @@
+=== redis常用命令
+
+redis
+
+https://developer.aliyun.com/article/236383
+
+---
+
+redis-cli 操作
+
+登录验证
+
+`redis-cli -h 127.0.0.1 -p 6379`
+
+使用密码认证登录
+
+`redis-cli -h 127.0.0.1 -p 6379 -a Password`
+
+测试与服务器的连接是否仍然生效
+
+
+
+[source,代码]
+----
+ping
+
+127.0.0.1:6379> ping
+PONG
+
+----
+
+增删改查
+
+[source,bash]
+----
+# set 增
+127.0.0.1:6379> set name lu
+OK
+127.0.0.1:6379> set age 20
+OK
+
+# keys * 查看所有的key
+127.0.0.1:6379> keys *
+1) "age"
+2) "name"
+
+# 查看key为name的值
+127.0.0.1:6379> get name
+"lu"
+
+# 修改key为name的值
+127.0.0.1:6379> set name li
+OK
+127.0.0.1:6379> get name
+"li"
+
+# 删除key为name的值
+127.0.0.1:6379> del name
+(integer) 1
+127.0.0.1:6379> keys *
+1) "age"
+----
+
+
+检查给定 key 是否存在
+
+`EXISTS key`
+
+为给定 key 设置过期时间，以秒计。
+
+`EXPIRE key seconds`
+
+查看key的过期时间
+
+`ttl key`
+
+查看key的类型
+`type key`
+
+向key追加内容
+
+`append content`
+
+查看key的长度
+
+`strlen key`
+
+
+
+java spring boot 操作redis 相关信息
+
+2.如何确定合适的maxIdle和minIdle？
+
+----
+建议maxIdle=maxTotal，为什么这么说呢？假如现在maxTotal是100，maxIdle是50，那么允许的最大空闲数是50，那么在一个高峰期，如果连接池中的50个已经通过连接池的getResource获取到了，这个时候第51个连接是要通过newJedis以及TCP三次握手建立一个新的连接，实际上这本身是有一定开销的。这样可以减少新的开销。建议预热minIdle，第一次getResource时是newJedis并建立TCP三次握手的，对于并发量较大的情况是无法容忍第一次开销的，那么可以在应用初始化的时候提前使用getResource做一些操作。
+----

@@ -1,0 +1,5 @@
+== MongoDB
+
+include::sections/MongoDB常用命令.adoc[]
+
+<<<

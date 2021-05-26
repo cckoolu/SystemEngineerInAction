@@ -1,0 +1,6 @@
+[[_redis_chapter]]
+== redis
+
+include::sections/redis常用命令.adoc[]
+
+<<<
