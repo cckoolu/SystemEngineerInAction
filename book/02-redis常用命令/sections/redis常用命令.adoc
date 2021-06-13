@@ -1,3 +1,9 @@
+=== redis 设置密码
+`vim /etc/redis/redis.conf`
+
+    取消注释requirepass，后面跟密码
+    requirepass password
+
 === redis常用命令
 
 redis

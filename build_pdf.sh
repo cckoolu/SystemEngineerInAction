@@ -13,4 +13,4 @@ rm -f 小盧的自我修养.pdf
 rm -f images/*
 rm -rf .asciidoctor/
 
-bundle exec rake book:build_pdf
+bundle-2.7 exec rake book:build_pdf
